@@ -35,7 +35,7 @@ selected=$(python3 "$PLUGIN_DIR/scripts/picker.py" 2>/dev/null |
 		--with-nth=1 \
 		--nth=1 \
 		--no-sort \
-		--layout=reverse \
+		--layout=reverse-list \
 		--border=rounded \
 		--border-label=" 󱜚 OpenCode Sessions " \
 		--border-label-pos=2 \
@@ -44,8 +44,8 @@ selected=$(python3 "$PLUGIN_DIR/scripts/picker.py" 2>/dev/null |
 		--color="pointer:#D300C4,marker:#0ABDC6,spinner:#0ABDC6" \
 		--prompt="  " \
 		--pointer="▶" \
-		--header="  enter: open   esc: cancel   J/K: scroll preview   g/G: top/bottom   ctrl-d/u: half page" \
-		--preview="python3 $PLUGIN_DIR/scripts/preview.py {2} {3} 2>/dev/null" \
+		--header="  enter: open   esc: cancel   tab: expand   J/K: scroll   g/G: top/bottom" \
+		--preview="python3 $PLUGIN_DIR/scripts/picker.py --expanded 2>/dev/null | head -50" \
 		--preview-window="right:45%:wrap" \
 		--bind="ctrl-j:down,ctrl-k:up" \
 		--bind="J:preview-down,K:preview-up" \
@@ -53,6 +53,7 @@ selected=$(python3 "$PLUGIN_DIR/scripts/picker.py" 2>/dev/null |
 		--bind="ctrl-f:preview-page-down,ctrl-b:preview-page-up" \
 		--bind="g:preview-top,G:preview-bottom" \
 		--bind="/:toggle-preview" \
+		--bind="tab:execute-silent(echo expanded)+reload(python3 $PLUGIN_DIR/scripts/picker.py --expanded)" \
 		2>/dev/null |
 	awk -F'\t' '{print $2"\t"$3}') # extract path<TAB>session_id
 
