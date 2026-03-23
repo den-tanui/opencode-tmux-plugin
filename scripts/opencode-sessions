@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# opencode-sessions: List opencode sessions grouped by directory
+# Usage: opencode-sessions [--list|--attach]
+
+set -euo pipefail
+
+SESSION_DIR="${OPENCODE_SESSION_DIR:-/home/.local/share/opencode/storage/session}"
+TMUX_SESSION_PREFIX="opencode-"
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed" >&2
+    exit 1
+fi
+
+# Get all unique directories from session files
+get_directories() {
+    find "$SESSION_DIR" -name "*.json" -type f 2>/dev/null | \
+        xargs -I{} jq -r '.directory' {} 2>/dev/null | \
+        grep -v '^$' | \
+        sort -u
+}
+
+# Get sessions for a specific directory
+get_sessions_for_dir() {
+    local dir="$1"
+    find "$SESSION_DIR" -name "*.json" -type f 2>/dev/null | \
+        while read -r file; do
+            jq -r --arg d "$dir" 'select(.directory == $d) | "\(.id)|\(.title)|\(.time.created)"' "$file" 2>/dev/null
+        done | \
+        grep -v '^$' | \
+        sort -t'|' -k3 -rn | \
+        while IFS='|' read -r id title created; do
+            # Convert timestamp to readable date
+            date_str=$(date -d "@$((created / 1000))" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown")
+            echo "$id|$title|$date_str"
+        done
+}
+
+# List all directories with session count
+list_directories() {
+    local count=0
+    while IFS= read -r dir; do
+        if [[ -n "$dir" ]]; then
+            count=$((count + 1))
+            # Get the most recent session for this directory
+            local latest
+            latest=$(get_sessions_for_dir "$dir" | head -1 || echo "")
+            local title=""
+            if [[ -n "$latest" ]]; then
+                title=$(echo "$latest" | cut -d'|' -f2)
+            fi
+            printf "[%d] %s\n" "$count" "$dir"
+            printf "    Latest: %s\n" "$title"
+        fi
+    done < <(get_directories)
+}
+
+# Attach to a directory's session
+attach_to_session() {
+    local dir="$1"
+    local session_id
+    
+    # Get the most recent session for this directory
+    session_id=$(get_sessions_for_dir "$dir" | head -1 | cut -d'|' -f1)
+    
+    if [[ -z "$session_id" ]]; then
+        echo "No sessions found for directory: $dir" >&2
+        exit 1
+    fi
+    
+    # Create tmux session name from directory
+    local session_name
+    session_name=$(basename "$dir" | tr -d '[:space:]' | tr '[:punct:]' '-')
+    session_name="${TMUX_SESSION_PREFIX}${session_name}"
+    
+    # Check if tmux session already exists
+    if tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Switching to existing tmux session: $session_name"
+        tmux switch-client -t "$session_name"
+    else
+        echo "Creating new tmux session: $session_name"
+        tmux new-session -d -s "$session_name"
+        tmux switch-client -t "$session_name"
+    fi
+    
+    echo "Resuming opencode session: $session_id"
+    opencode --session "$session_id"
+}
+
+# Interactive selection
+interactive_select() {
+    local dirs=()
+    while IFS= read -r dir; do
+        if [[ -n "$dir" ]]; then
+            dirs+=("$dir")
+        fi
+    done < <(get_directories)
+    
+    if [[ ${#dirs[@]} -eq 0 ]]; then
+        echo "No opencode sessions found"
+        exit 0
+    fi
+    
+    # Use fzf for interactive selection if available
+    if command -v fzf &> /dev/null; then
+        local selected
+        selected=$(printf '%s\n' "${dirs[@]}" | fzf --prompt="Select directory: ")
+        if [[ -n "$selected" ]]; then
+            attach_to_session "$selected"
+        fi
+    else
+        # Fallback to simple selection
+        echo "Select a directory:"
+        local i=1
+        for d in "${dirs[@]}"; do
+            printf "[%d] %s\n" "$i" "$d"
+            i=$((i + 1))
+        done
+        read -p "Enter number: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#dirs[@]} ]]; then
+            attach_to_session "${dirs[$((choice - 1))]}"
+        else
+            echo "Invalid selection" >&2
+            exit 1
+        fi
+    fi
+}
+
+# Main
+case "${1:-}" in
+    --list|-l)
+        list_directories
+        ;;
+    --attach|-a)
+        interactive_select
+        ;;
+    *)
+        interactive_select
+        ;;
+esac
