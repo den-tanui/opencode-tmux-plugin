@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # open.sh — receives "<directory>\t<session-id>" and opens a tmux window with opencode
-# If a window for the session already exists, switches to it instead.
+# Logic:
+# 1. Extract directory name (basename) as session name
+# 2. If tmux session exists → switch to it, create new window
+# 3. If not → create new tmux session (with default window)
+# 4. Run opencode --session {session-id} OR opencode sessions list (if in dir mode)
 
 set -euo pipefail
 
@@ -17,29 +21,35 @@ SID=$(printf '%s' "$INPUT" | cut -f2)
 	exit 1
 }
 
-# Window name derived from session id (first 8 chars)
-WIN_NAME="opencode-${SID:0:8}"
+# Use directory basename as session name
+SESSION_NAME=$(basename "$DIR")
 
-# If a window for this session already exists anywhere, switch to it
-existing=$(tmux list-windows -a -F "#{session_name}:#{window_name}" 2>/dev/null |
-	grep ":${WIN_NAME}$" | head -1 || true)
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+	# Session exists - switch to it and create a new window
+	echo "Switching to existing tmux session: $SESSION_NAME"
+	tmux switch-client -t "$SESSION_NAME"
 
-if [ -n "$existing" ]; then
-	echo "Switching to existing window: $existing"
-	tmux switch-client -t "$existing"
-	exit 0
+	# Create a new window with the directory
+	WINDOW_NAME="opencode"
+	tmux new-window -n "$WINDOW_NAME" -c "$DIR" -t "$SESSION_NAME"
+	tmux select-window -t "$SESSION_NAME:$WINDOW_NAME"
+
+	# Run command in the new window
+	if [ "$SID" = "dir" ]; then
+		tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME" "opencode sessions list" Enter
+	else
+		tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME" "opencode --session $SID" Enter
+	fi
+else
+	# Session doesn't exist - create it (comes with default window)
+	echo "Creating new tmux session: $SESSION_NAME"
+	tmux new-session -d -s "$SESSION_NAME" -c "$DIR"
+	tmux switch-client -t "$SESSION_NAME"
+
+	# Run command in the default window
+	if [ "$SID" = "dir" ]; then
+		tmux send-keys -t "$SESSION_NAME" "opencode sessions list" Enter
+	else
+		tmux send-keys -t "$SESSION_NAME" "opencode --session $SID" Enter
+	fi
 fi
-
-# Create a new window in the current session and run opencode
-CURRENT_SESSION=$(tmux display-message -p '#S')
-CURRENT_CLIENT=$(tmux display-message -p '#{client_name}')
-
-# Use the directory basename for better readability
-DIR_NAME=$(basename "$DIR")
-DISPLAY_NAME="${DIR_NAME:0:20}-${SID:0:6}"
-
-tmux new-window -n "$WIN_NAME" -c "$DIR" -t "${CURRENT_SESSION}:"
-tmux send-keys -t "${CURRENT_SESSION}:${WIN_NAME}" "opencode --session $SID" Enter
-tmux switch-client -c "$CURRENT_CLIENT" -t "${CURRENT_SESSION}:${WIN_NAME}"
-
-echo "Created new window: $WIN_NAME for session $SID"

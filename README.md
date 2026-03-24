@@ -84,6 +84,19 @@ set -g @opencode_sessions_popup_height '75%'
 
 # Session directory (default: auto-detected)
 set -g @opencode_sessions_dir '/home/.local/share/opencode/storage/session'
+
+# Hide directories with only one session (default: off)
+set -g @opencode_sessions_hide_single '1'
+```
+# Key to trigger the session picker (default: g)
+set -g @opencode_sessions_key 'g'
+
+# Popup dimensions (default: 80% width, 75% height)
+set -g @opencode_sessions_popup_width '80%'
+set -g @opencode_sessions_popup_height '75%'
+
+# Session directory (default: auto-detected)
+set -g @opencode_sessions_dir '/home/.local/share/opencode/storage/session'
 ```
 
 ## Scripts

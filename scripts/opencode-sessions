@@ -69,7 +69,9 @@ attach_to_session() {
         exit 1
     fi
     
-    # Create tmux session name from directory
+    # Create tmux session name from directory (no prefix)
+    local session_name
+    session_name=$(basename "$dir" | tr -d '[:space:]' | tr '[:punct:]' '-')
     local session_name
     session_name=$(basename "$dir" | tr -d '[:space:]' | tr '[:punct:]' '-')
     session_name="${TMUX_SESSION_PREFIX}${session_name}"

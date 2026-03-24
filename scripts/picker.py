@@ -3,22 +3,21 @@
 picker.py — lists all OpenCode sessions for fzf consumption.
 
 Reads OPENCODE_SESSIONS_DIR (env) or default path, groups sessions by
-project directory, and emits tab-delimited lines.
+project directory, and emits tab-delimited lines:
 
-Two modes:
-- collapsed (default): Only directory headers, preview shows session list
-- expanded: All sessions listed under each directory
+    <display-text>\t<directory>\t<session-id>
 
-Usage: picker.py [--expanded]
+fzf is invoked with --with-nth=1 so only display text is shown;
+columns 2 and 3 are passed to preview.py and open.sh as hidden payload.
 """
 
+import argparse
 import json
 import os
 import sys
 import time
-import argparse
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 # ── config ───────────────────────────────────────────────────────────────────
 
@@ -26,10 +25,18 @@ OPENCODE_SESSIONS_DIR = os.environ.get(
     "OPENCODE_SESSIONS_DIR", "/home/.local/share/opencode/storage/session"
 )
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ── Tokyo Night colors ───────────────────────────────────────────────────────
+
+PURPLE = "\033[38;5;141m"  # #bb9af7 - lavender
+BLUE = "\033[38;5;69m"  # #7aa2f7 - blue
+WHITE = "\033[38;5;189m"  # #c0caf5 - light
+GRAY = "\033[38;5;244m"  # #565f89 - muted
+GREEN = "\033[38;5;107m"  # #9ece6a - green
+YELLOW = "\033[38;5;179m"  # #e0af68 - yellow
+RESET = "\033[0m"
 
 
-def Age(mtime: float) -> str:
+def age(mtime: float) -> str:
     """Return human-readable age string."""
     s = int(time.time() - mtime)
     if s < 60:
@@ -68,97 +75,24 @@ def get_sessions() -> dict[str, list[dict]]:
     for project_dir in sessions_dir.iterdir():
         if not project_dir.is_dir():
             continue
-
         for session_file in project_dir.glob("*.json"):
             session = parse_session(session_file)
             if session and session.get("directory"):
-                mtime = session_file.stat().st_mtime
-                session["_mtime"] = mtime
+                session["_mtime"] = session_file.stat().st_mtime
                 sessions_by_dir[session["directory"]].append(session)
 
+    for dir_key in sessions_by_dir:
+        sessions_by_dir[dir_key].sort(key=lambda x: x.get("_mtime", 0), reverse=True)
+
     return sessions_by_dir
-
-
-# ── ANSI colors ───────────────────────────────────────────────────────────────
-
-CYAN = "\033[38;5;45m"
-MAGENTA = "\033[38;5;201m"
-GRAY = "\033[38;5;242m"
-WHITE = "\033[38;5;252m"
-RESET = "\033[0m"
 
 
 def col(s: str, c: str) -> str:
     return f"{c}{s}{RESET}"
 
 
-def format_directory_header(
-    dir_path: str, session_count: int, mtime: float, home: Path
-) -> str:
-    """Format a directory header line."""
-    short_path = str(dir_path).replace(str(home), "~")
-    a = Age(mtime)
-    return f"▸ {col(short_path, CYAN)}  {col(f'({session_count} sessions, {a})', GRAY)}"
-
-
-def format_session_line(session: dict, home: Path) -> str:
-    """Format a session line."""
-    dir_path = session.get("directory", "")
-    sid = session.get("id", "")
-    title = session.get("title", "")
-    mtime = session.get("_mtime", 0)
-    summary = session.get("summary", {})
-
-    a = Age(mtime)
-    additions = summary.get("additions", 0)
-    deletions = summary.get("deletions", 0)
-
-    # Truncate title
-    label = (title[:50] + "…") if len(title) > 50 else (title or col("(empty)", GRAY))
-    age_s = col(f"[{a:>4}]", MAGENTA)
-    changes = col(f"+{additions} -{deletions}", GRAY)
-
-    # Format: <display>\t<dir>\t<session-id>
-    return f"    {age_s}  {label} {changes}\t{dir_path}\t{sid}"
-
-
-def format_directory_preview(dir_sessions: list[dict], home: Path) -> str:
-    """Format preview for a directory (shows all sessions)."""
-    lines = []
-    for session in dir_sessions:
-        sid = session.get("id", "")
-        title = session.get("title", "")
-        mtime = session.get("_mtime", 0)
-        summary = session.get("summary", {})
-
-        a = Age(mtime)
-        additions = summary.get("additions", 0)
-        deletions = summary.get("deletions", 0)
-        label = (title[:40] + "…") if len(title) > 40 else (title or "(empty)")
-
-        lines.append(f"  [{a:>4}]  {label}  +{additions} -{deletions}  ({sid[:12]}...)")
-
-    return "\n".join(lines)
-
-
-# ── main ─────────────────────────────────────────────────────────────────────
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--expanded", action="store_true", help="Show all sessions expanded"
-    )
-    args = parser.parse_args()
-
-    home = Path.home()
-    sessions_by_dir = get_sessions()
-
-    if not sessions_by_dir:
-        print("No opencode sessions found.", file=sys.stderr)
-        sys.exit(1)
-
-    # Sort directories by most recent session (newest first)
+def print_dirs_only(sessions_by_dir: dict, hide_single: bool):
+    """Print only directories, no sessions."""
     sorted_dirs = sorted(
         sessions_by_dir.keys(),
         key=lambda d: sessions_by_dir[d][0].get("_mtime", 0),
@@ -168,23 +102,73 @@ def main() -> None:
     for dir_path in sorted_dirs:
         sessions = sessions_by_dir[dir_path]
 
-        if args.expanded:
-            # Expanded mode: show directory header + all sessions
-            header = format_directory_header(
-                dir_path, len(sessions), sessions[0].get("_mtime", 0), home
-            )
-            # Display text | Directory | SessionID (empty for directories)
-            print(f"{header}\t{dir_path}\t")
+        if hide_single and len(sessions) == 1:
+            continue
 
-            for session in sessions:
-                print(format_session_line(session, home))
-        else:
-            # Collapsed mode: show only directory header
-            header = format_directory_header(
-                dir_path, len(sessions), sessions[0].get("_mtime", 0), home
+        count = len(sessions)
+        # Use "dir" as a marker for directory-only mode
+        print(
+            f"  {col(str(dir_path), PURPLE)}  {col(f'({count} sessions)', GRAY)}\t{dir_path}\tdir"
+        )
+
+
+def print_all(sessions_by_dir: dict, hide_single: bool):
+    """Print directories with all their sessions."""
+    sorted_dirs = sorted(
+        sessions_by_dir.keys(),
+        key=lambda d: sessions_by_dir[d][0].get("_mtime", 0),
+        reverse=True,
+    )
+
+    for dir_path in sorted_dirs:
+        sessions = sessions_by_dir[dir_path]
+
+        if hide_single and len(sessions) == 1:
+            continue
+
+        count = len(sessions)
+        print(f"  {col(str(dir_path), PURPLE)}  {col(f'({count})', GRAY)}")
+
+        for session in sessions:
+            sid = session.get("id", "")
+            title = session.get("title", "")
+            mtime = session.get("_mtime", 0)
+            a = age(mtime)
+
+            label = (
+                (title[:58] + "…")
+                if len(title) > 58
+                else (title or col("(empty)", GRAY))
             )
-            # Display text | Directory | SessionID (empty for directories)
-            print(f"{header}\t{dir_path}\t")
+            age_s = col(f"[{a:>4}]", BLUE)
+
+            print(f"    {age_s}  {col(label, WHITE)}\t{dir_path}\t{sid}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="List OpenCode sessions for fzf")
+    parser.add_argument(
+        "--hide-single",
+        action="store_true",
+        help="Hide directories with only one session",
+    )
+    parser.add_argument(
+        "--dirs-only",
+        action="store_true",
+        help="Show only directories, sessions appear in preview",
+    )
+    args = parser.parse_args()
+
+    sessions_by_dir = get_sessions()
+
+    if not sessions_by_dir:
+        print("No opencode sessions found.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dirs_only:
+        print_dirs_only(sessions_by_dir, args.hide_single)
+    else:
+        print_all(sessions_by_dir, args.hide_single)
 
 
 if __name__ == "__main__":
